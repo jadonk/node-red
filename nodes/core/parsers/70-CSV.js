@@ -1,5 +1,5 @@
 /**
- * Copyright 2014 IBM Corp.
+ * Copyright 2014,2015 IBM Corp.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ module.exports = function(RED) {
     "use strict";
     function CSVNode(n) {
         RED.nodes.createNode(this,n);
-        this.template = n.temp.split(",");
+        this.template = (n.temp || "").split(",");
         this.sep = (n.sep || ',').replace("\\t","\t").replace("\\n","\n").replace("\\r","\r");
         this.quo = '"';
         this.ret = (n.ret || "\n").replace("\\n","\n").replace("\\r","\r");
@@ -55,26 +55,52 @@ module.exports = function(RED) {
                         }
                         if (!Array.isArray(msg.payload)) { msg.payload = [ msg.payload ]; }
                         for (var s = 0; s < msg.payload.length; s++) {
-                            for (var t=0; t < node.template.length; t++) {
-
-                                // aaargh - resorting to eval here - but fairly contained front and back.
-                                var p = RED.util.ensureString(eval("msg.payload[s]."+node.template[t]));
-
-                                if (p === "undefined") { p = ""; }
-                                if (p.indexOf(node.sep) != -1) { // add quotes if any "commas"
-                                    ou += node.quo + p + node.quo + node.sep;
+                            if ((Array.isArray(msg.payload[s])) || (typeof msg.payload[s] !== "object")) {
+                                if (typeof msg.payload[s] !== "object") { msg.payload = [ msg.payload ]; }
+                                for (var t = 0; t < msg.payload[s].length; t++) {
+                                    if (!msg.payload[s][t]) { msg.payload[s][t] = ""; }
+                                    if (msg.payload[s][t].toString().indexOf(node.quo) !== -1) { // add double quotes if any quotes
+                                        msg.payload[s][t] = msg.payload[s][t].toString().replace(/"/g, '""');
+                                        msg.payload[s][t] = node.quo + msg.payload[s][t].toString() + node.quo;
+                                    }
+                                    else if (msg.payload[s][t].toString().indexOf(node.sep) !== -1) { // add quotes if any "commas"
+                                        msg.payload[s][t] = node.quo + msg.payload[s][t].toString() + node.quo;
+                                    }
                                 }
-                                else if (p.indexOf(node.quo) != -1) { // add double quotes if any quotes
-                                    p = p.replace(/"/g, '""');
-                                    ou += node.quo + p + node.quo + node.sep;
-                                }
-                                else { ou += p + node.sep; } // otherwise just add
+                                ou += msg.payload[s].join(node.sep) + node.ret;
                             }
-                            ou = ou.slice(0,-1) + node.ret; // remove final "comma" and add "newline"
+                            else {
+                                if ((node.template.length === 1) && (node.template[0] === '')) {
+                                    node.warn(RED._("csv.errors.obj_csv"));
+                                }
+                                else {
+                                    for (var t=0; t < node.template.length; t++) {
+                                        if (node.template[t] === '') {
+                                            ou += node.sep;
+                                        }
+                                        else {
+                                            // aaargh - resorting to eval here - but fairly contained front and back.
+                                            var p = RED.util.ensureString(eval("msg.payload[s]."+node.template[t]));
+
+                                            if (p === "undefined") { p = ""; }
+                                            if (p.indexOf(node.quo) !== -1) { // add double quotes if any quotes
+                                                p = p.replace(/"/g, '""');
+                                                ou += node.quo + p + node.quo + node.sep;
+                                            }
+                                            else if (p.indexOf(node.sep) !== -1) { // add quotes if any "commas"
+                                                ou += node.quo + p + node.quo + node.sep;
+                                            }
+                                            else { ou += p + node.sep; } // otherwise just add
+                                        }
+                                    }
+                                    ou = ou.slice(0,-1) + node.ret; // remove final "comma" and add "newline"
+                                }
+                            }
                         }
-                        node.send({payload:ou});
+                        msg.payload = ou;
+                        if (msg.payload !== '') { node.send(msg); }
                     }
-                    catch(e) { node.log(e); }
+                    catch(e) { node.error(e,msg); }
                 }
                 else if (typeof msg.payload == "string") { // convert CSV string to object
                     try {
@@ -84,27 +110,28 @@ module.exports = function(RED) {
                         var o = {}; // output object to build up
                         var a = []; // output array is needed for multiline option
                         var first = true; // is this the first line
+                        var line = msg.payload;
                         var tmp = "";
 
                         // For now we are just going to assume that any \r or \n means an end of line...
                         //   got to be a weird csv that has singleton \r \n in it for another reason...
 
                         // Now process the whole file/line
-                        for (var i = 0; i < msg.payload.length; i++) {
+                        for (var i = 0; i < line.length; i++) {
                             if ((node.hdrin === true) && first) { // if the template is in the first line
-                                if ((msg.payload[i] === "\n")||(msg.payload[i] === "\r")) { // look for first line break
+                                if ((line[i] === "\n")||(line[i] === "\r")) { // look for first line break
                                     node.template = clean(tmp.split(node.sep));
                                     first = false;
                                 }
-                                else { tmp += msg.payload[i]; }
+                                else { tmp += line[i]; }
                             }
                             else {
-                                if (msg.payload[i] === node.quo) { // if it's a quote toggle inside or outside
+                                if (line[i] === node.quo) { // if it's a quote toggle inside or outside
                                     f = !f;
-                                    if (msg.payload[i-1] === node.quo) { k[j] += '\"'; } // if it's a quotequote then it's actually a quote
-                                    if ((msg.payload[i-1] !== node.sep) && (msg.payload[i+1] !== node.sep)) { k[j] += msg.payload[i]; }
+                                    if (line[i-1] === node.quo) { k[j] += '\"'; } // if it's a quotequote then it's actually a quote
+                                    //if ((line[i-1] !== node.sep) && (line[i+1] !== node.sep)) { k[j] += line[i]; }
                                 }
-                                else if ((msg.payload[i] === node.sep) && f) { // if we are outside of quote (ie valid separator
+                                else if ((line[i] === node.sep) && f) { // if we are outside of quote (ie valid separator
                                     if (!node.goodtmpl) { node.template[j] = "col"+(j+1); }
                                     if ( node.template[j] && (node.template[j] !== "") && (k[j] !== "" ) ) {
                                         if ( (k[j].charAt(0) !== "+") && !isNaN(Number(k[j])) ) { k[j] = Number(k[j]); }
@@ -113,15 +140,20 @@ module.exports = function(RED) {
                                     j += 1;
                                     k[j] = "";
                                 }
-                                else if (f && ((msg.payload[i] === "\n") || (msg.payload[i] === "\r"))) { // handle multiple lines
+                                else if (f && ((line[i] === "\n") || (line[i] === "\r"))) { // handle multiple lines
                                     //console.log(j,k,o,k[j]);
+                                    if (!node.goodtmpl) { node.template[j] = "col"+(j+1); }
                                     if ( node.template[j] && (node.template[j] !== "") && (k[j] !== "") ) {
                                         if ( (k[j].charAt(0) !== "+") && !isNaN(Number(k[j])) ) { k[j] = Number(k[j]); }
                                         else { k[j].replace(/\r$/,''); }
                                         o[node.template[j]] = k[j];
                                     }
                                     if (JSON.stringify(o) !== "{}") { // don't send empty objects
-                                        if (node.multi === "one") { node.send({payload:o}); } // either send
+                                        if (node.multi === "one") {
+                                            var newMessage = RED.util.cloneMessage(msg);
+                                            newMessage.payload = o;
+                                            node.send(newMessage); // either send
+                                        }
                                         else { a.push(o); } // or add to the array
                                     }
                                     j = 0;
@@ -129,7 +161,7 @@ module.exports = function(RED) {
                                     o = {};
                                 }
                                 else { // just add to the part of the message
-                                    k[j] += msg.payload[i];
+                                    k[j] += line[i];
                                 }
                             }
                         }
@@ -141,17 +173,24 @@ module.exports = function(RED) {
                             else { k[j].replace(/\r$/,''); }
                             o[node.template[j]] = k[j];
                         }
-                        msg.payload = o;
                         if (JSON.stringify(o) !== "{}") { // don't send empty objects
-                            if (node.multi === "one") { node.send({payload:o}); } // either send
+                            if (node.multi === "one") {
+                                var newMessage = RED.util.cloneMessage(msg);
+                                newMessage.payload = o;
+                                node.send(newMessage); // either send
+                            }
                             else { a.push(o); } // or add to the aray
                         }
-                        if (node.multi !== "one") { node.send({payload:a}); } // finally send the array
+                        if (node.multi !== "one") {
+                            msg.payload = a;
+                            node.send(msg); // finally send the array
+                        }
                     }
-                    catch(e) { node.log(e); }
+                    catch(e) { node.error(e,msg); }
                 }
-                else { node.log("This node only handles csv strings or js objects."); }
+                else { node.warn(RED._("csv.errors.csv_js")); }
             }
+            else { node.send(msg); } // If no payload - just pass it on.
         });
     }
     RED.nodes.registerType("csv",CSVNode);

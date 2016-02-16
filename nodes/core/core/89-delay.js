@@ -31,32 +31,29 @@ module.exports = function(RED) {
 
         if (n.timeoutUnits === "milliseconds") {
             this.timeout = n.timeout;
-        } else if (n.timeoutUnits === "seconds") {
-            this.timeout = n.timeout * 1000;
         } else if (n.timeoutUnits === "minutes") {
             this.timeout = n.timeout * (60 * 1000);
         } else if (n.timeoutUnits === "hours") {
             this.timeout = n.timeout * (60 * 60 * 1000);
         } else if (n.timeoutUnits === "days") {
             this.timeout = n.timeout * (24 * 60 * 60 * 1000);
+        } else {   // Default to seconds
+            this.timeout = n.timeout * 1000;
         }
 
-        if (n.rateUnits === "second") {
-            this.rate = 1000/n.rate;
-        } else if (n.rateUnits === "minute") {
+        if (n.rateUnits === "minute") {
             this.rate = (60 * 1000)/n.rate;
         } else if (n.rateUnits === "hour") {
             this.rate = (60 * 60 * 1000)/n.rate;
         } else if (n.rateUnits === "day") {
             this.rate = (24 * 60 * 60 * 1000)/n.rate;
+        } else {  // Default to seconds
+            this.rate = 1000/n.rate;
         }
 
         if (n.randomUnits === "milliseconds") {
             this.randomFirst = n.randomFirst * 1;
             this.randomLast = n.randomLast * 1;
-        } else if (n.randomUnits === "seconds") {
-            this.randomFirst = n.randomFirst * 1000;
-            this.randomLast = n.randomLast * 1000;
         } else if (n.randomUnits === "minutes") {
             this.randomFirst = n.randomFirst * (60 * 1000);
             this.randomLast = n.randomLast * (60 * 1000);
@@ -66,6 +63,9 @@ module.exports = function(RED) {
         } else if (n.randomUnits === "days") {
             this.randomFirst = n.randomFirst * (24 * 60 * 60 * 1000);
             this.randomLast = n.randomLast * (24 * 60 * 60 * 1000);
+        } else {  // Default to seconds
+            this.randomFirst = n.randomFirst * 1000;
+            this.randomLast = n.randomLast * 1000;
         }
 
         this.diff = this.randomLast - this.randomFirst;
@@ -74,18 +74,22 @@ module.exports = function(RED) {
         this.buffer = [];
         this.intervalID = -1;
         this.randomID = -1;
-        this.lastSent;
+        this.lastSent = null;
         this.drop = n.drop;
         var node = this;
 
         if (this.pauseType === "delay") {
             this.on("input", function(msg) {
                 var id;
-                id = setTimeout(function(){
+                id = setTimeout(function() {
                     node.idList.splice(node.idList.indexOf(id),1);
+                    if (node.idList.length === 0) { node.status({}); }
                     node.send(msg);
                 }, node.timeout);
                 this.idList.push(id);
+                if ((node.timeout > 1000) && (node.idList.length !== 0)) {
+                    node.status({fill:"blue",shape:"dot",text:" "});
+                }
             });
 
             this.on("close", function() {
@@ -93,6 +97,7 @@ module.exports = function(RED) {
                     clearTimeout(this.idList[i]);
                 }
                 this.idList = [];
+                this.status({});
             });
 
         } else if (this.pauseType === "rate") {
@@ -104,7 +109,7 @@ module.exports = function(RED) {
                             node.status({text:node.buffer.length});
                         }
                         if (node.buffer.length > 1000) {
-                            node.warn(this.name + " buffer exceeded 1000 messages");
+                            node.warn(this.name + " " + RED._("delay.error.buffer"));
                         }
                     } else {
                         node.send(msg);
@@ -112,7 +117,7 @@ module.exports = function(RED) {
                             if (node.buffer.length === 0) {
                                 clearInterval(node.intervalID);
                                 node.intervalID = -1;
-                                node.status({text:""});
+                                node.status({});
                             }
 
                             if (node.buffer.length > 0) {
@@ -139,6 +144,7 @@ module.exports = function(RED) {
             this.on("close", function() {
                 clearInterval(this.intervalID);
                 this.buffer = [];
+                node.status({});
             });
 
         } else if (this.pauseType === "queue") {
@@ -147,7 +153,6 @@ module.exports = function(RED) {
                     node.send(node.buffer.shift()); // send the first on the queue
                 }
                 node.status({text:node.buffer.length});
-                //console.log(node.buffer);
             },node.rate);
 
             this.on("input", function(msg) {
@@ -166,13 +171,13 @@ module.exports = function(RED) {
             this.on("close", function() {
                 clearInterval(this.intervalID);
                 this.buffer = [];
-                node.status({text:node.buffer.length});
+                node.status({});
             });
 
         } else if (this.pauseType === "random") {
             this.on("input", function(msg) {
                 var wait = node.randomFirst + (node.diff * Math.random());
-                var id = setTimeout(function(){
+                var id = setTimeout(function() {
                     node.idList.splice(node.idList.indexOf(id),1);
                     node.send(msg);
                 }, wait);

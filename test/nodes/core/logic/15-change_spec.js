@@ -1,5 +1,5 @@
 /**
- * Copyright 2014 IBM Corp.
+ * Copyright 2014, 2015 IBM Corp.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ var should = require("should");
 var changeNode = require("../../../../nodes/core/logic/15-change.js");
 var helper = require("../../helper.js");
 
-describe('ChangeNode', function() {
+describe('change Node', function() {
 
     beforeEach(function(done) {
         helper.startServer(done);
@@ -30,15 +30,33 @@ describe('ChangeNode', function() {
         helper.stopServer(done);
     });
 
-    describe('#replace' , function() {
-        it('should be loaded', function(done) {
-            var flow = [{"id":"changeNode1","type":"change","action":"replace","property":"payload","from":"","to":"","reg":false,"name":"changeNode","wires":[[]]}];
-            helper.load(changeNode, flow, function() {
-                var changeNode1 = helper.getNode("changeNode1");
-                changeNode1.should.have.property('name', 'changeNode');
-                done();
-            });
+    it('should load node with defaults', function(done) {
+        var flow = [{ id: "c1", type: "change", name:"change1" }];
+        helper.load(changeNode, flow, function() {
+            helper.getNode("c1").should.have.property("name", "change1");
+            helper.getNode("c1").should.have.property("rules", [{fromt:'str',pt:'msg',tot:'str',t:undefined,p:''}]);
+            done();
         });
+    });
+    it('should load defaults if set to replace', function(done) {
+        var flow = [{ id: "c1", type: "change", name:"change1", action:"replace" }];
+        helper.load(changeNode, flow, function() {
+            helper.getNode("c1").should.have.property("name", "change1");
+            helper.getNode("c1").should.have.property("rules", [ {fromt: 'str', p: '', pt: 'msg', t: 'set', to: '', tot: 'str'} ]);
+            done();
+        });
+    });
+    it('should load defaults if set to change', function(done) {
+        var flow = [{ id: "c1", type: "change", name:"change1", action:"change"  }];
+        helper.load(changeNode, flow, function() {
+            //console.log(helper.getNode("c1"));
+            helper.getNode("c1").should.have.property("name", "change1");
+            helper.getNode("c1").should.have.property("rules", [ { from: /(?:)/g,fromt: 'str', p: '',pt: 'msg', re: undefined, t: 'change', to: '',tot: 'str' } ]);
+            done();
+        });
+    });
+
+    describe('#set' , function() {
 
         it('sets the value of the message property', function(done) {
             var flow = [{"id":"changeNode1","type":"change","action":"replace","property":"payload","from":"","to":"changed","reg":false,"name":"changeNode","wires":[["helperNode1"]]},
@@ -46,6 +64,7 @@ describe('ChangeNode', function() {
             helper.load(changeNode, flow, function() {
                 var changeNode1 = helper.getNode("changeNode1");
                 var helperNode1 = helper.getNode("helperNode1");
+                var rule = helper.getNode("changeNode1").rules[0];
                 helperNode1.on("input", function(msg) {
                     try {
                         msg.payload.should.equal("changed");
@@ -100,6 +119,9 @@ describe('ChangeNode', function() {
             helper.load(changeNode, flow, function() {
                 var changeNode1 = helper.getNode("changeNode1");
                 var helperNode1 = helper.getNode("helperNode1");
+                var rule = helper.getNode("changeNode1").rules[0];
+                rule.t.should.eql('set');
+                rule.tot.should.eql('msg');
                 helperNode1.on("input", function(msg) {
                     try {
                         msg.foo.should.equal("bar");
@@ -219,8 +241,45 @@ describe('ChangeNode', function() {
                 changeNode1.receive({pay:{load:"changeMe"}});
             });
         });
-    });
 
+
+        it('changes the value to a number', function(done) {
+            var flow = [{"id":"changeNode1","type":"change",rules:[{"t":"set","p":"payload","to":"123","tot":"num"}],"name":"changeNode","wires":[["helperNode1"]]},
+                        {id:"helperNode1", type:"helper", wires:[]}];
+            helper.load(changeNode, flow, function() {
+                var changeNode1 = helper.getNode("changeNode1");
+                var helperNode1 = helper.getNode("helperNode1");
+                helperNode1.on("input", function(msg) {
+                    try {
+                        msg.payload.should.eql(123);
+                        done();
+                    } catch(err) {
+                        done(err);
+                    }
+                });
+                changeNode1.receive({payload:""});
+            });
+        });
+        it('changes the value to a js object', function(done) {
+            var flow = [{"id":"changeNode1","type":"change",rules:[{"t":"set","p":"payload","to":'{"a":123}',"tot":"json"}],"name":"changeNode","wires":[["helperNode1"]]},
+                        {id:"helperNode1", type:"helper", wires:[]}];
+            helper.load(changeNode, flow, function() {
+                var changeNode1 = helper.getNode("changeNode1");
+                var helperNode1 = helper.getNode("helperNode1");
+                helperNode1.on("input", function(msg) {
+                    try {
+                        msg.payload.should.eql({a:123});
+                        done();
+                    } catch(err) {
+                        done(err);
+                    }
+                });
+                changeNode1.receive({payload:""});
+            });
+        });
+
+
+    });
     describe('#change', function() {
         it('changes the value of the message property', function(done) {
             var flow = [{"id":"changeNode1","type":"change","action":"change","property":"payload","from":"Hello","to":"Goodbye","reg":false,"name":"changeNode","wires":[["helperNode1"]]},
@@ -330,26 +389,57 @@ describe('ChangeNode', function() {
             });
         });
 
-        it('Reports invalid regex', function(done) {
+        it('reports invalid regex', function(done) {
             var sinon = require('sinon');
             var flow = [{"id":"changeNode1","type":"change","action":"change","property":"payload","from":"\\+**+","to":"NUMBER","reg":true,"name":"changeNode","wires":[["helperNode1"]]},
                         {id:"helperNode1", type:"helper", wires:[]}];
             helper.load(changeNode, flow, function() {
+                var logEvents = helper.log().args.filter(function (evt) {
+                    return evt[0].type == "change";
+                });
+                logEvents.should.have.length(1);
+                var msg = logEvents[0][0];
+                msg.should.have.property('level', helper.log().ERROR);
+                msg.should.have.property('id', 'changeNode1');
+                done();
+
+            });
+        });
+
+        it('supports regex groups - new rule format', function(done) {
+            var flow = [{"id":"changeNode1","type":"change",rules:[{"t":"change","p":"payload","from":"(Hello)","to":"$1-$1-$1","fromt":"re","tot":"str"}],"name":"changeNode","wires":[["helperNode1"]]},
+                        {id:"helperNode1", type:"helper", wires:[]}];
+            helper.load(changeNode, flow, function() {
                 var changeNode1 = helper.getNode("changeNode1");
                 var helperNode1 = helper.getNode("helperNode1");
-
-                sinon.stub(changeNode1, 'error', function(error) {
-                    if(error.indexOf("regular expression" > -1)) {
+                helperNode1.on("input", function(msg) {
+                    try {
+                        msg.payload.should.equal("Hello-Hello-Hello World");
                         done();
-                    } else {
-                        try {
-                            should.fail(null, null, "An error should be reported for an invalid regex");
-                        } catch (err) {
-                            done(err);
-                        }
+                    } catch(err) {
+                        done(err);
                     }
-                 });
-                changeNode1.receive({payload:"This is irrelevant"});
+                });
+                changeNode1.receive({payload:"Hello World"});
+            });
+        });
+
+
+        it('changes the value - new rule format', function(done) {
+            var flow = [{"id":"changeNode1","type":"change",rules:[{"t":"change","p":"payload","from":"ABC","to":"123","fromt":"str","tot":"str"}],"name":"changeNode","wires":[["helperNode1"]]},
+                        {id:"helperNode1", type:"helper", wires:[]}];
+            helper.load(changeNode, flow, function() {
+                var changeNode1 = helper.getNode("changeNode1");
+                var helperNode1 = helper.getNode("helperNode1");
+                helperNode1.on("input", function(msg) {
+                    try {
+                        msg.payload.should.equal("abc123abc");
+                        done();
+                    } catch(err) {
+                        done(err);
+                    }
+                });
+                changeNode1.receive({payload:"abcABCabc"});
             });
         });
     });
@@ -429,5 +519,60 @@ describe('ChangeNode', function() {
             });
         });
     });
-});
+    describe('- multiple rules', function() {
 
+        it('handles multiple rules', function(done) {
+            var flow = [{"id":"changeNode1","type":"change","wires":[["helperNode1"]],
+                        rules:[
+                            {t:"set",p:"payload",to:"newValue"},
+                            {t:"change",p:"changeProperty",from:"this",to:"that"},
+                            {t:"delete",p:"deleteProperty"}
+                        ]},
+                        {id:"helperNode1", type:"helper", wires:[]}];
+            helper.load(changeNode, flow, function() {
+                var changeNode1 = helper.getNode("changeNode1");
+                var helperNode1 = helper.getNode("helperNode1");
+                helperNode1.on("input", function(msg) {
+                    try {
+                        msg.payload.should.equal("newValue");
+                        msg.changeProperty.should.equal("change that value");
+                        should.not.exist(msg.deleteProperty);
+                        done();
+                    } catch(err) {
+                        done(err);
+                    }
+                });
+                changeNode1.receive({
+                    payload:"changeMe",
+                    changeProperty:"change this value",
+                    deleteProperty:"delete this value"
+                });
+            });
+        });
+        it('applies multiple rules in order', function(done) {
+            var flow = [{"id":"changeNode1","type":"change","wires":[["helperNode1"]],
+                        rules:[
+                            {t:"set",p:"payload",to:"a this (hi)"},
+                            {t:"change",p:"payload",from:"this",to:"that"},
+                            {t:"change",p:"payload",from:"\\(.*\\)",to:"[new]",re:true},
+                        ]},
+                        {id:"helperNode1", type:"helper", wires:[]}];
+            helper.load(changeNode, flow, function() {
+                var changeNode1 = helper.getNode("changeNode1");
+                var helperNode1 = helper.getNode("helperNode1");
+                helperNode1.on("input", function(msg) {
+                    try {
+                        msg.payload.should.equal("a that [new]");
+                        done();
+                    } catch(err) {
+                        done(err);
+                    }
+                });
+                changeNode1.receive({
+                    payload:"changeMe"
+                });
+            });
+        });
+
+    });
+});

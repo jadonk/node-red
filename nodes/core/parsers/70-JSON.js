@@ -28,18 +28,23 @@ module.exports = function(RED) {
                         msg.payload = JSON.parse(msg.payload);
                         node.send(msg);
                     }
-                    catch(e) { node.log(e+ "\n"+msg.payload); }
+                    catch(e) { node.error(e.message,msg); }
                 }
                 else if (typeof msg.payload === "object") {
-                    if (!Buffer.isBuffer(msg.payload) ) {
-                        if (!util.isArray(msg.payload)) {
+                    if (!Buffer.isBuffer(msg.payload)) {
+                        try {
                             msg.payload = JSON.stringify(msg.payload);
                             node.send(msg);
                         }
+                        catch(e) {
+                            node.error(RED._("json.errors.dropped-error"));
+                        }
                     }
+                    else { node.warn(RED._("json.errors.dropped-object")); }
                 }
-                else { node.log("dropped: "+msg.payload); }
+                else { node.warn(RED._("json.errors.dropped")); }
             }
+            else { node.send(msg); } // If no payload - just pass it on.
         });
     }
     RED.nodes.registerType("json",JSONNode);

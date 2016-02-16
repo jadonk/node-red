@@ -1,5 +1,5 @@
 /**
- * Copyright 2013, 2014 IBM Corp.
+ * Copyright 2013, 2016 IBM Corp.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
  **/
 
 module.exports = function(RED) {
+    "use strict";
     var cron = require("cron");
 
     function InjectNode(n) {
@@ -31,21 +32,17 @@ module.exports = function(RED) {
 
         if (this.repeat && !isNaN(this.repeat) && this.repeat > 0) {
             this.repeat = this.repeat * 1000;
-            this.log("repeat = "+this.repeat);
+            if (RED.settings.verbose) { this.log(RED._("inject.repeat",this)); }
             this.interval_id = setInterval( function() {
                 node.emit("input",{});
             }, this.repeat );
         } else if (this.crontab) {
-            if (cron) {
-                this.log("crontab = "+this.crontab);
-                this.cronjob = new cron.CronJob(this.crontab,
-                    function() {
-                        node.emit("input",{});
-                    },
-                    null,true);
-            } else {
-                this.error("'cron' module not found");
-            }
+            if (RED.settings.verbose) { this.log(RED._("inject.crontab",this)); }
+            this.cronjob = new cron.CronJob(this.crontab,
+                function() {
+                    node.emit("input",{});
+                },
+                null,true);
         }
 
         if (this.once) {
@@ -54,12 +51,14 @@ module.exports = function(RED) {
 
         this.on("input",function(msg) {
             var msg = {topic:this.topic};
-            if ( (this.payloadType == null && this.payload == "") || this.payloadType == "date") {
+            if ( (this.payloadType == null && this.payload === "") || this.payloadType === "date") {
                 msg.payload = Date.now();
-            } else if (this.payloadType == null || this.payloadType === "string") {
+            } else if (this.payloadType == null) {
                 msg.payload = this.payload;
-            } else {
+            } else if (this.payloadType == 'none') {
                 msg.payload = "";
+            } else {
+                msg.payload = RED.util.evaluateNodeProperty(this.payload,this.payloadType,this,msg);
             }
             this.send(msg);
             msg = null;
@@ -71,27 +70,26 @@ module.exports = function(RED) {
     InjectNode.prototype.close = function() {
         if (this.interval_id != null) {
             clearInterval(this.interval_id);
-            this.log("inject: repeat stopped");
+            if (RED.settings.verbose) { this.log(RED._("inject.stopped")); }
         } else if (this.cronjob != null) {
             this.cronjob.stop();
-            this.log("inject: cronjob stopped");
+            if (RED.settings.verbose) { this.log(RED._("inject.stopped")); }
             delete this.cronjob;
         }
     }
 
-    RED.httpAdmin.post("/inject/:id", function(req,res) {
-            var node = RED.nodes.getNode(req.params.id);
-            if (node != null) {
-                try {
-                    node.receive();
-                    res.send(200);
-                } catch(err) {
-                    res.send(500);
-                    node.error("Inject failed:"+err);
-                    console.log(err.stack);
-                }
-            } else {
-                res.send(404);
+    RED.httpAdmin.post("/inject/:id", RED.auth.needsPermission("inject.write"), function(req,res) {
+        var node = RED.nodes.getNode(req.params.id);
+        if (node != null) {
+            try {
+                node.receive();
+                res.sendStatus(200);
+            } catch(err) {
+                res.sendStatus(500);
+                node.error(RED._("inject.failed",{error:err.toString()}));
             }
+        } else {
+            res.sendStatus(404);
+        }
     });
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright 2013 IBM Corp.
+ * Copyright 2013, 2015 IBM Corp.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,54 +14,84 @@
  * limitations under the License.
  **/
 
-var server = require("./server");
-var nodes = require("./nodes");
-var library = require("./api/library");
-var comms = require("./comms");
-var log = require("./log");
-var util = require("./util");
 var fs = require("fs");
-var settings = require("./settings");
-var credentials = require("./nodes/credentials");
-
 var path = require('path');
+
+var runtime = require("./runtime");
+var api = require("./api");
 
 process.env.NODE_RED_HOME = process.env.NODE_RED_HOME || path.resolve(__dirname+"/..");
 
-var events = require("events");
+var nodeApp = null;
+var adminApp = null;
+var server = null;
+var apiEnabled = false;
 
-var RED = {
-
-    init: function(httpServer,userSettings) {
-        userSettings.version = this.version();
-        settings.init(userSettings);
-        server.init(httpServer,settings);
-        return server.app;
-    },
-    
-    start: server.start,
-    stop: server.stop,
-    nodes: nodes,
-    library: { register: library.register },
-    credentials: credentials,
-    events: events,
-    log: log,
-    comms: comms,
-    settings:settings,
-    util: util,
-    version: function () {
-        var p = require(path.join(process.env.NODE_RED_HOME,"package.json"));
-        if (fs.existsSync(path.join(process.env.NODE_RED_HOME,".git"))) {
-            return p.version+".git";
-        } else {
-            return p.version;
-        }
+function checkBuild() {
+    var editorFile = path.resolve(path.join(__dirname,"..","public","red","red.min.js"));
+    try {
+        var stats = fs.statSync(editorFile);
+    } catch(err) {
+        var e = new Error("Node-RED not built");
+        e.code = "not_built";
+        throw e;
     }
+}
+
+module.exports = {
+    init: function(httpServer,userSettings) {
+        if (!userSettings) {
+            userSettings = httpServer;
+            httpServer = null;
+        }
+
+        if (!userSettings.SKIP_BUILD_CHECK) {
+            checkBuild();
+        }
+
+        if (!userSettings.coreNodesDir) {
+            userSettings.coreNodesDir = path.resolve(path.join(__dirname,"..","nodes"));
+        }
+
+        if (userSettings.httpAdminRoot !== false || userSettings.httpNodeRoot !== false) {
+            runtime.init(userSettings,api);
+            api.init(httpServer,runtime);
+            apiEnabled = true;
+        } else {
+            runtime.init(userSettings);
+            apiEnabled = false;
+        }
+        adminApp = runtime.adminApi.adminApp;
+        nodeApp = runtime.adminApi.nodeApp;
+        server = runtime.adminApi.server;
+        return;
+    },
+    start: function() {
+        return runtime.start().then(function() {
+            if (apiEnabled) {
+                return api.start();
+            }
+        });
+    },
+    stop: function() {
+        return runtime.stop().then(function() {
+            if (apiEnabled) {
+                return api.stop();
+            }
+        })
+    },
+    nodes: runtime.nodes,
+    log: runtime.log,
+    settings:runtime.settings,
+    util: runtime.util,
+    version: runtime.version,
+
+    comms: api.comms,
+    library: api.library,
+    auth: api.auth,
+
+    get app() { console.log("Deprecated use of RED.app - use RED.httpAdmin instead"); return runtime.app },
+    get httpAdmin() { return adminApp },
+    get httpNode() { return nodeApp },
+    get server() { return server }
 };
-
-RED.__defineGetter__("app", function() { console.log("Deprecated use of RED.app - use RED.httpAdmin instead"); return server.app });
-RED.__defineGetter__("httpAdmin", function() { return server.app });
-RED.__defineGetter__("httpNode", function() { return server.nodeApp });
-RED.__defineGetter__("server", function() { return server.server });
-
-module.exports = RED;

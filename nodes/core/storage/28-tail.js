@@ -20,7 +20,7 @@ module.exports = function(RED) {
     var plat = require('os').platform();
 
     if (plat.match(/^win/)) {
-        throw "Info : Currently not supported on Windows.";
+        throw RED._("tail.errors.windowsnotsupport");
     }
 
     function TailNode(n) {
@@ -57,10 +57,11 @@ module.exports = function(RED) {
         });
 
         tail.stderr.on("data", function(data) {
-            node.warn(data.toString());
+            node.error(data.toString());
         });
 
         this.on("close", function() {
+            /* istanbul ignore else */
             if (tail) { tail.kill(); }
         });
     }

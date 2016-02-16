@@ -1,5 +1,5 @@
 /**
- * Copyright 2013, 2014 IBM Corp.
+ * Copyright 2013, 2015 IBM Corp.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,93 +14,107 @@
  * limitations under the License.
  **/
 
-var util = require("util");
-
 var redApp = null;
-var storage = require("../storage");
+var storage;
+var log;
+var needsPermission = require("./auth").needsPermission;
 
 function createLibrary(type) {
     if (redApp) {
-        redApp.get(new RegExp("/library/"+type+"($|\/(.*))"),function(req,res) {
+        redApp.get(new RegExp("/library/"+type+"($|\/(.*))"),needsPermission("library.read"),function(req,res) {
             var path = req.params[1]||"";
             storage.getLibraryEntry(type,path).then(function(result) {
+                log.audit({event: "library.get",type:type},req);
                 if (typeof result === "string") {
                     res.writeHead(200, {'Content-Type': 'text/plain'});
                     res.write(result);
-                    res.end(); 
+                    res.end();
                 } else {
                     res.json(result);
                 }
             }).otherwise(function(err) {
                 if (err) {
-                    util.log("[red] Error loading library entry '"+path+"' : "+err);
-                    if (err.message.indexOf('forbidden') === 0) {
-                        res.send(403);
+                    log.warn(log._("api.library.error-load-entry",{path:path,message:err.toString()}));
+                    if (err.code === 'forbidden') {
+                        log.audit({event: "library.get",type:type,error:"forbidden"},req);
+                        res.status(403).end();
                         return;
                     }
                 }
-                res.send(404);
+                log.audit({event: "library.get",type:type,error:"not_found"},req);
+                res.status(404).end();
             });
         });
-        
-        redApp.post(new RegExp("/library/"+type+"\/(.*)"),function(req,res) {
+
+        redApp.post(new RegExp("/library/"+type+"\/(.*)"),needsPermission("library.write"),function(req,res) {
             var path = req.params[0];
-            var fullBody = '';
-            req.on('data', function(chunk) {
-                fullBody += chunk.toString();
-            });
-            req.on('end', function() {
-                storage.saveLibraryEntry(type,path,req.query,fullBody).then(function() {
-                    res.send(204);
-                }).otherwise(function(err) {
-                    util.log("[red] Error saving library entry '"+path+"' : "+err);
-                    if (err.message.indexOf('forbidden') === 0) {
-                        res.send(403);
-                        return;
-                    }
-                    res.send(500);
-                });
+            var meta = req.body;
+            var text = meta.text;
+            delete meta.text;
+
+            storage.saveLibraryEntry(type,path,meta,text).then(function() {
+                log.audit({event: "library.set",type:type},req);
+                res.status(204).end();
+            }).otherwise(function(err) {
+                log.warn(log._("api.library.error-save-entry",{path:path,message:err.toString()}));
+                    if (err.code === 'forbidden') {
+                    log.audit({event: "library.set",type:type,error:"forbidden"},req);
+                    res.status(403).end();
+                    return;
+                }
+                log.audit({event: "library.set",type:type,error:"unexpected_error",message:err.toString()},req);
+                res.status(500).json({error:"unexpected_error", message:err.toString()});
             });
         });
     }
 }
 module.exports = {
-    init: function(app) {
+    init: function(app,runtime) {
         redApp = app;
+        log = runtime.log;
+        storage = runtime.storage;
     },
     register: createLibrary,
-    
+
     getAll: function(req,res) {
         storage.getAllFlows().then(function(flows) {
+            log.audit({event: "library.get.all",type:"flow"},req);
             res.json(flows);
         });
     },
     get: function(req,res) {
         storage.getFlow(req.params[0]).then(function(data) {
+            // data is already a JSON string
+            log.audit({event: "library.get",type:"flow",path:req.params[0]},req);
             res.set('Content-Type', 'application/json');
             res.send(data);
         }).otherwise(function(err) {
             if (err) {
-                util.log("[red] Error loading flow '"+req.params[0]+"' : "+err);
-                if (err.message.indexOf('forbidden') === 0) {
-                    res.send(403);
+                log.warn(log._("api.library.error-load-flow",{path:req.params[0],message:err.toString()}));
+                if (err.code === 'forbidden') {
+                    log.audit({event: "library.get",type:"flow",path:req.params[0],error:"forbidden"},req);
+                    res.status(403).end();
                     return;
                 }
             }
-            res.send(404);
+            log.audit({event: "library.get",type:"flow",path:req.params[0],error:"not_found"},req);
+            res.status(404).end();
         });
     },
     post: function(req,res) {
         var flow = JSON.stringify(req.body);
         storage.saveFlow(req.params[0],flow).then(function() {
-            res.send(204);
+            log.audit({event: "library.set",type:"flow",path:req.params[0]},req);
+            res.status(204).end();
         }).otherwise(function(err) {
-            util.log("[red] Error loading flow '"+req.params[0]+"' : "+err);
-            if (err.message.indexOf('forbidden') === 0) {
-                res.send(403);
+            log.warn(log._("api.library.error-save-flow",{path:req.params[0],message:err.toString()}));
+            if (err.code === 'forbidden') {
+                log.audit({event: "library.set",type:"flow",path:req.params[0],error:"forbidden"},req);
+                res.status(403).end();
                 return;
             }
-            res.send(500);
+            log.audit({event: "library.set",type:"flow",path:req.params[0],error:"unexpected_error",message:err.toString()},req);
+            res.status(500).send({error:"unexpected_error", message:err.toString()});
         });
     }
 }

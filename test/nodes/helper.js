@@ -15,8 +15,10 @@
  **/
 
 var should = require("should");
+var sinon = require("sinon");
 var when = require("when");
 var request = require('supertest');
+var express = require("express");
 var nock;
 if (!process.version.match(/^v0\.[0-9]\./)) {
     // only set nock for node >= 0.10
@@ -28,10 +30,11 @@ if (!process.version.match(/^v0\.[0-9]\./)) {
     }
 }
 var RED = require("../../red/red.js");
-var redNodes = require("../../red/nodes");
-var flows = require("../../red/nodes/flows");
-var credentials = require("../../red/nodes/credentials");
-var comms = require("../../red/comms.js");
+var redNodes = require("../../red/runtime/nodes");
+var flows = require("../../red/runtime/nodes/flows");
+var credentials = require("../../red/runtime/nodes/credentials");
+var comms = require("../../red/api/comms.js");
+var log = require("../../red/runtime/log.js");
 
 var http = require('http');
 var express = require('express');
@@ -41,7 +44,7 @@ var address = '127.0.0.1';
 var listenPort = 0; // use ephemeral port
 var port;
 var url;
-
+var logSpy;
 var server;
 
 function helperNode(n) {
@@ -50,6 +53,15 @@ function helperNode(n) {
 
 module.exports = {
     load: function(testNode, testFlows, testCredentials, cb) {
+        logSpy = sinon.spy(log,"log");
+        logSpy.FATAL = log.FATAL;
+        logSpy.ERROR = log.ERROR;
+        logSpy.WARN = log.WARN;
+        logSpy.INFO = log.INFO;
+        logSpy.DEBUG = log.DEBUG;
+        logSpy.TRACE = log.TRACE;
+        logSpy.METRIC = log.METRIC;
+
         if (typeof testCredentials === 'function') {
             cb = testCredentials;
             testCredentials = {};
@@ -74,17 +86,31 @@ module.exports = {
             available: function() { return false; }
         };
 
-        redNodes.init(settings, storage);
-        credentials.init(storage);
+
+        var red = {};
+        for (var i in RED) {
+            if (RED.hasOwnProperty(i) && !/^(init|start|stop)$/.test(i)) {
+                var propDescriptor = Object.getOwnPropertyDescriptor(RED,i);
+                Object.defineProperty(red,i,propDescriptor);
+            }
+        }
+
+        red["_"] = function(messageId) {
+            return messageId;
+        };
+
+        redNodes.init({settings:settings, storage:storage});
+        credentials.init(storage,express());
         RED.nodes.registerType("helper", helperNode);
         if (Array.isArray(testNode)) {
             for (var i = 0; i < testNode.length; i++) {
-                testNode[i](RED);
+                testNode[i](red);
             }
         } else {
-            testNode(RED);            
+            testNode(red);
         }
         flows.load().then(function() {
+            flows.startFlows();
             should.deepEqual(testFlows, flows.getFlows());
             cb();
         });
@@ -92,6 +118,7 @@ module.exports = {
     unload: function() {
         // TODO: any other state to remove between tests?
         redNodes.clearRegistry();
+        logSpy.restore();
         return flows.stopFlows();
     },
 
@@ -111,7 +138,10 @@ module.exports = {
 
     startServer: function(done) {
         server = http.createServer(function(req,res){app(req,res);});
-        RED.init(server, {});
+        RED.init(server, {
+            SKIP_BUILD_CHECK: true,
+            logging:{console:{level:'off'}}
+        });
         server.listen(listenPort, address);
         server.on('listening', function() {
             port = server.address().port;
@@ -123,7 +153,11 @@ module.exports = {
     //TODO consider saving TCP handshake/server reinit on start/stop/start sequences
     stopServer: function(done) {
         if(server) {
-            server.close(done);
+            try {
+                server.close(done);
+            } catch(e) {
+                done();
+            }
         }
     },
 
@@ -131,4 +165,5 @@ module.exports = {
 
     nock: nock,
 
+    log: function() { return logSpy;}
 };
